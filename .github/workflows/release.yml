@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+    - '*'
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.s6_arch }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: matrix
+        run: |
+          echo '::set-output name=s6_arch::'$(cut -f1 conf/toolchains | sed -z '$ s/\n$//' | jq -R -s -c 'split("\n")')
+
+      - uses: ncipollo/release-action@v1
+        with:
+          omitBodyDuringUpdate: true
+          allowUpdates: true
+
+  release:
+    needs: [ setup ]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        s6_arch: ${{fromJson(needs.setup.outputs.matrix)}}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - run: |
+          TAG="${GITHUB_REF##*/}" ; TAG="${TAG#v}" ; make ARCH="${{ matrix.s6_arch }}" VERSION="${TAG}"
+
+      # by default, arm-linux-musleabi and arm-linux-musleabihf produce tarballs named "arm",
+      # move arm-linux-musleabihf to "armhf" to distinguish
+      - run: |
+          cd output ; for f in s6-overlay-arm* ; do mv "$f" "s6-overlay-armhf${f#s6-overlay-arm}" ; done
+        if: ${{ matrix.s6_arch == 'arm-linux-musleabihf' }}
+
+      # delete the noarch/symlink overlays on non-x86_64, to prevent duplicate warnings on
+      # release upload
+      - run: |
+          rm output/*arch*
+        if: ${{ matrix.s6_arch != 'x86_64-linux-musl' }}
+
+      - run: |
+          cd output ; for f in *.tar.xz ; do sha256sum "$f" > "$f".sha256 ; done
+
+      - uses: ncipollo/release-action@v1
+        with:
+          artifacts: "output/*.tar.xz,output/*.sha256"
+          omitBodyDuringUpdate: true
+          allowUpdates: true
